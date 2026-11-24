@@ -4,7 +4,7 @@ Claude Code と Codex CLI が A2A でお互いに非同期で仕事を頼み、�
 
 ## スキルとして入れる
 
-`skills/agent-mesh/` に、Claude Code と Codex の両方で使える Agent Skill があります。リポジトリを GitHub に push したあと、次のコマンドで入れられます。
+`skills/agent-mesh/` に、Claude Code と Codex の両方で使える Agent Skill があります。main に取り込んだあとは、次のコマンドで入れられます。main 以外のブランチから入れるときは `nogikun/agent-mesh#<ブランチ名>` と指定します。リポジトリは非公開なので、入れられるのはリポジトリを読める人だけです。
 
 ```sh
 npx skills add nogikun/agent-mesh --skill agent-mesh -a claude-code codex -g

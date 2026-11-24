@@ -135,7 +135,17 @@ agent-mesh/
 | Codex（ネットワーク許可） | 「Claude に peek() の正しい実装を聞いて」 | 送信し、待たずに requestId を報告した。Claude から正しい答えが返った |
 | Codex を先に使う（設定なし） | 「src/stack.ts を Claude にレビューしてもらいたい」 | 設定がないこと、サンドボックスから `~/.config` に書けないことを説明し、利用者が実行するコマンドを示した |
 
-GitHub からのインストール（`npx skills add nogikun/agent-mesh ...`）は、リポジトリをまだ push していないため試していない。
+### 6.2 GitHub からのインストール
+
+`feat/agent-mesh-prototype` ブランチを push して確かめた。リポジトリは非公開で、手元の git の認証情報で取得している。
+
+| 指定のしかた | 結果 |
+|---|---|
+| `https://github.com/nogikun/agent-mesh/tree/feat/agent-mesh-prototype/skills/agent-mesh` | 失敗。ブランチ名を `/` で区切って `feat` と読み、`Remote branch feat not found` になった |
+| `nogikun/agent-mesh#feat/agent-mesh-prototype --skill agent-mesh` | 成功。入ったコピーの `mesh status` も動いた |
+| `https://github.com/nogikun/agent-mesh.git#feat/agent-mesh-prototype --skill agent-mesh` | 成功 |
+
+既定のブランチ（main）に取り込んだあとは、`#` を付けずに `nogikun/agent-mesh` で入れられる。
 
 ## 7. 運用手順
 
@@ -153,7 +163,7 @@ npx skills add nogikun/agent-mesh --skill agent-mesh -a claude-code codex -g
 
 ## 8. 未解決事項
 
-- Q01: GitHub からのインストールを、push したあとに確かめる。リポジトリの公開範囲も決める。
+- Q01: リポジトリは非公開なので、ほかの人が `npx skills add` で入れるには、公開するかリポジトリへの権限を渡す必要がある。公開範囲を決める。
 - Q02: スキルありとスキルなしの評価（eval）と、description の発動精度の調整をまだしていない。
 - Q03: Codex が自分で `mesh send` を呼ぶには、サンドボックスでのループバック通信の許可が要る（`sandbox_workspace_write.network_access=true` で通ることは確かめた）。権限の判断は利用者が行う。対話モードの Codex で、権限を上げた再実行を求める流れはまだ確かめていない。
 - Q04: 利用者が増えたら、案B（npm での公開）に移すかを再検討する。その場合も SKILL.md の案内は変えず、CLI の呼び出し方だけを変える。
