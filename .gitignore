@@ -1,2 +1,25 @@
 .direnv/
 .DS_Store
+
+# 依存パッケージ
+node_modules/
+
+# mesh の実行時データ。設定とトークンは ~/.config/agent-mesh に置くが、リポジトリ内に作ったときの保険
+.mesh/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# ローカルの設定と秘密
+.env
+.env.*
+.claude/settings.local.json
+
+# このリポジトリに npx skills add でスキルを入れて試したときのコピー（正本は skills/）
+.claude/skills/
+.agents/skills/
+skills-lock.json
+
+# 検査ツールの記録
+.yomiyasu/
