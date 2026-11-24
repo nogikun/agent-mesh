@@ -1,0 +1,25 @@
+{
+  "name": "agent-mesh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent Mesh prototype: Claude Code <-> Codex async delegation over A2A (v0.3 JSON-RPC subset)",
+  "bin": {
+    "mesh": "bin/mesh"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.4.1",
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.ts\" && node scripts/sync-skill.ts --check",
+    "typecheck": "tsc",
+    "mesh": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "sync:skill": "node scripts/sync-skill.ts",
+    "check:skill": "node scripts/sync-skill.ts --check"
+  },
+  "devDependencies": {
+    "@types/node": "24",
+    "typescript": "^7.0.2"
+  }
+}
