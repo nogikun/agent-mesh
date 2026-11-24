@@ -9,6 +9,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { startRuntime } from '../src/runtime.ts';
+import { startConnector } from '../src/connector.ts';
 import { loadConfig, type Config } from '../src/config.ts';
 
 const FAKE = resolve(import.meta.dirname, 'fake-agent.ts');
@@ -20,6 +21,7 @@ const freePort = () => new Promise<number>((r) => { const s = createServer().lis
 
 let A: Config & { path: string }, B: Config & { path: string };
 let rtA: Awaited<ReturnType<typeof startRuntime>>, rtB: Awaited<ReturnType<typeof startRuntime>>;
+let gwRw: Awaited<ReturnType<typeof startConnector>>, gwRo: Awaited<ReturnType<typeof startConnector>>;
 
 async function local(c: Config, method: string, body: object = {}, token = c.localToken) {
   const r = await fetch(`http://127.0.0.1:${c.port}/local/${method}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -45,6 +47,10 @@ before(async () => {
     agents: [{ id: 'claude-dev', provider: 'claude', workspace: dir, allowedSenders: ['host-a', 'host-b'], allowedPeers: ['codex-dev'], autoResume: true, command: fake('claude') }],
     peers: [{ id: 'codex-dev', url: `${ub}/agents/codex-dev`, token: 'a-to-b-token-xxxxxxxx' }, { id: 'claude-dev', url: `${ua}/agents/claude-dev`, token: 'a-to-a-token-xxxxxxxx' },
       { id: 'bad-cred', url: `${ub}/agents/codex-dev`, token: 'wrong-token-xxxxxxxxxx' }, { id: 'ghost', url: `${ub}/agents/ghost`, token: 'a-to-b-token-xxxxxxxx' }],
+    connectors: [
+      { id: 'muse', token: 'conn-muse-token-xxxxxxxx', apiKey: 'muse-api-key-xxxxxxxxxxxx', port: await freePort(), allowedPeers: ['codex-dev'] },
+      { id: 'viewer', token: 'conn-view-token-xxxxxxxx', apiKey: 'view-api-key-xxxxxxxxxxxx', port: await freePort(), allowedPeers: ['codex-dev'], readOnly: true },
+    ],
     policy,
   };
   const b: Config = {
@@ -60,8 +66,10 @@ before(async () => {
   B = loadConfig(join(dir, 'b.json'));
   rtA = await startRuntime(A);
   rtB = await startRuntime(B);
+  gwRw = await startConnector(A, A.connectors![0]);
+  gwRo = await startConnector(A, A.connectors![1]);
 });
-after(async () => { await rtA?.close(); await rtB?.close(); });
+after(async () => { await gwRw?.close(); await gwRo?.close(); await rtA?.close(); await rtB?.close(); });
 
 test('AT04/AT05: async send returns at once, result arrives by push (no polling of the agent)', async () => {
   const r = await local(A, 'send', { to: 'codex-dev', message: 'SLEEP:300 hello', idempotencyKey: 'k-async-1' });
@@ -185,4 +193,64 @@ test('AT14: restart marks interrupted work FAILED instead of re-running it', asy
   const t = new DatabaseSync(B.dbPath).prepare("SELECT state, error FROM tasks WHERE task_id='tsk_crash'").get() as any;
   assert.equal(t.state, 'FAILED');
   assert.match(t.error, /INTERRUPTED/);
+});
+
+// ---------- Muse connector gateway (MCP over Streamable HTTP) ----------
+let rpcId = 0;
+async function mcp(url: string, method: string, params?: object, key = 'muse-api-key-xxxxxxxxxxxx', headers: Record<string, string> = {}) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
+  });
+  return { status: res.status, body: res.status === 202 ? null : await res.json() as any };
+}
+const call = async (name: string, args: object, url = gwRw.url, key?: string) => (await mcp(url, 'tools/call', { name, arguments: args }, key)).body.result;
+
+test('MCP: handshake, tool list, and read-only connectors hide write tools', async () => {
+  const init = await mcp(gwRw.url, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } });
+  assert.equal(init.body.result.protocolVersion, '2025-06-18');
+  assert.ok(init.body.result.capabilities.tools);
+  const note = await fetch(gwRw.url, { method: 'POST', headers: { authorization: 'Bearer muse-api-key-xxxxxxxxxxxx', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
+  assert.equal(note.status, 202);
+  const rw = (await mcp(gwRw.url, 'tools/list')).body.result.tools.map((t: any) => t.name);
+  assert.deepEqual(rw, ['mesh_list_agents', 'mesh_submit_task', 'mesh_get_task', 'mesh_cancel_task']);
+  const ro = (await mcp(gwRo.url, 'tools/list', {}, 'view-api-key-xxxxxxxxxxxx')).body.result.tools.map((t: any) => t.name);
+  assert.deepEqual(ro, ['mesh_list_agents', 'mesh_get_task']);
+  const denied = await mcp(gwRo.url, 'tools/call', { name: 'mesh_submit_task', arguments: {} }, 'view-api-key-xxxxxxxxxxxx');
+  assert.equal(denied.body.error.code, -32602);
+});
+
+test('MCP: wrong key, foreign Origin and GET are refused', async () => {
+  assert.equal((await mcp(gwRw.url, 'tools/list', {}, 'wrong')).status, 401);
+  assert.equal((await mcp(gwRw.url, 'tools/list', {}, undefined, { origin: 'https://evil.example' })).status, 403);
+  assert.equal((await fetch(gwRw.url, { headers: { authorization: 'Bearer muse-api-key-xxxxxxxxxxxx' } })).status, 405);
+  assert.equal((await mcp(gwRw.url, 'tools/list', {}, 'view-api-key-xxxxxxxxxxxx')).status, 401, 'keys are per connector');
+});
+
+test('MCP: submit -> get result; only allowed agents; idempotent retries', async () => {
+  const agents = await call('mesh_list_agents', {});
+  assert.deepEqual(agents.structuredContent.agents.map((a: any) => a.id), ['codex-dev']);
+  const args = { agentId: 'codex-dev', message: 'from muse', idempotencyKey: 'muse-key-0000000001' };
+  const s1 = await call('mesh_submit_task', args);
+  assert.ok(!s1.isError, JSON.stringify(s1));
+  const s2 = await call('mesh_submit_task', args);
+  assert.equal(s2.structuredContent.taskId, s1.structuredContent.taskId);
+  const done = await until(async () => { const g = await call('mesh_get_task', { taskId: s1.structuredContent.taskId }); return g.structuredContent.state === 'COMPLETED' && g; });
+  assert.match(done.structuredContent.result, /ECHO: from muse/);
+  const other = await call('mesh_submit_task', { agentId: 'claude-dev', message: 'x', idempotencyKey: 'muse-key-0000000002' });
+  assert.equal(other.isError, true);
+  assert.equal(other.structuredContent.error.code, 'FORBIDDEN');
+});
+
+test('MCP: connector cannot see other tasks and arguments are validated', async () => {
+  const human = await local(A, 'send', { to: 'codex-dev', message: 'owner task' });
+  const peek = await call('mesh_get_task', { taskId: human.data.requestId });
+  assert.equal(peek.structuredContent.error.code, 'NOT_FOUND');
+  const extra = await call('mesh_submit_task', { agentId: 'codex-dev', message: 'x', idempotencyKey: 'muse-key-0000000003', sudo: true });
+  assert.equal(extra.structuredContent.error.code, 'INVALID_ARGUMENT');
+  const short = await call('mesh_submit_task', { agentId: 'codex-dev', message: 'x', idempotencyKey: 'short' });
+  assert.equal(short.structuredContent.error.code, 'INVALID_ARGUMENT');
+  const st = await local(A, 'status', {}, 'conn-muse-token-xxxxxxxx');
+  assert.equal(st.error?.code, 'FORBIDDEN', 'connector token cannot use owner-only APIs');
 });

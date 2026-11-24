@@ -27,7 +27,12 @@ class HttpError extends Error {
 }
 
 /** Local principal: the human (node token) or a running agent turn (per-turn capability token). */
-type Principal = { kind: 'human' } | { kind: 'turn'; taskId: string; agentId: string };
+type Principal =
+  | { kind: 'human' }
+  | { kind: 'turn'; taskId: string; agentId: string }
+  | { kind: 'connector'; id: string; readOnly: boolean; allowedPeers: string[] };
+/** Who appears as the sender of out-tasks; also the ownership key for get/cancel/inbox. */
+const actorOf = (pr: Principal) => pr.kind === 'human' ? 'human' : pr.kind === 'turn' ? pr.agentId : `connector:${pr.id}`;
 
 export function startRuntime(cfg: Config & { path: string }) {
   const leaked = BILLING_VARS.filter((v) => process.env[v]);
@@ -388,6 +393,8 @@ export function startRuntime(cfg: Config & { path: string }) {
     if (tok && safeEqual(tok, cfg.localToken)) return { kind: 'human' };
     const turn = tok ? turnTokens.get(tok) : undefined;
     if (turn) return { kind: 'turn', ...turn };
+    const c = tok ? cfg.connectors?.find((x) => safeEqual(x.token, tok)) : undefined;
+    if (c) return { kind: 'connector', id: c.id, readOnly: Boolean(c.readOnly), allowedPeers: c.allowedPeers };
     throw new HttpError(401, 'unauthenticated');
   }
 
@@ -403,8 +410,10 @@ export function startRuntime(cfg: Config & { path: string }) {
     if (!peer) throw new MeshError('NOT_FOUND', `unknown peer: ${b.to}`);
     if (!b.message) throw new MeshError('INVALID_ARGUMENT', '--message is required');
     if (byteLength(b.message) > LIMITS.maxInputBytes) throw new MeshError('LIMIT_EXCEEDED', 'message larger than 64KiB');
-    const sender = pr.kind === 'turn' ? pr.agentId : 'human';
+    const sender = actorOf(pr);
     if (pr.kind === 'turn' && !agents.get(pr.agentId)?.allowedPeers?.includes(peer.id)) throw new MeshError('FORBIDDEN', `${pr.agentId} may not delegate to ${peer.id}`);
+    if (pr.kind === 'connector' && pr.readOnly) throw new MeshError('FORBIDDEN', `connector ${pr.id} is read-only`);
+    if (pr.kind === 'connector' && !pr.allowedPeers.includes(peer.id)) throw new MeshError('FORBIDDEN', `connector ${pr.id} may not use ${peer.id}`);
     const origin = pr.kind === 'turn' ? getTask(db, pr.taskId)! : null;
     const depth = origin ? origin.depth + 1 : 0;
     const rootId = origin?.root_id ?? id('root');
@@ -446,7 +455,8 @@ export function startRuntime(cfg: Config & { path: string }) {
 
   function ownTask(pr: Principal, taskId: unknown) {
     const t = typeof taskId === 'string' ? getTask(db, taskId) : undefined;
-    if (!t || (pr.kind === 'turn' && t.agent_id !== pr.agentId)) throw new MeshError('NOT_FOUND', `task not found: ${taskId}`);
+    // non-owners only see what they sent themselves; others' tasks look nonexistent (no id probing)
+    if (!t || (pr.kind !== 'human' && t.agent_id !== actorOf(pr))) throw new MeshError('NOT_FOUND', `task not found: ${taskId}`);
     return t;
   }
 
@@ -466,6 +476,7 @@ export function startRuntime(cfg: Config & { path: string }) {
   }
 
   async function localCancel(pr: Principal, b: { id?: string }) {
+    if (pr.kind === 'connector' && pr.readOnly) throw new MeshError('FORBIDDEN', `connector ${pr.id} is read-only`);
     const t = ownTask(pr, b.id);
     if (t.direction === 'in') {
       if (pr.kind !== 'human') throw new MeshError('FORBIDDEN', 'only the node owner can cancel received tasks');
@@ -478,8 +489,8 @@ export function startRuntime(cfg: Config & { path: string }) {
   }
 
   function localInbox(pr: Principal) {
-    const where = pr.kind === 'turn' ? 'WHERE t.agent_id = ?' : '';
-    const args = pr.kind === 'turn' ? [pr.agentId] : [];
+    const where = pr.kind !== 'human' ? 'WHERE t.agent_id = ?' : '';
+    const args = pr.kind !== 'human' ? [actorOf(pr)] : [];
     const events = db.prepare(`SELECT i.event_id AS eventId, i.state, i.received_at AS receivedAt, t.task_id AS requestId, t.peer_id AS peerId,
       t.agent_id AS agentId, t.origin_task_id AS originTaskId, substr(t.result, 1, 500) AS resultPreview, t.error,
       c.status AS resumeStatus, substr(c.output, 1, 2000) AS resumeOutput
@@ -499,10 +510,13 @@ export function startRuntime(cfg: Config & { path: string }) {
     };
   }
 
-  const localAgents = () => ({
+  const localAgents = (pr: Principal) => pr.kind === 'connector' ? {
+    agents: [],
+    peers: cfg.peers.filter((p) => pr.allowedPeers.includes(p.id)).map((p) => ({ id: p.id })),
+  } : {
     agents: cfg.agents.map((a) => ({ id: a.id, provider: a.provider, autoResume: Boolean(a.autoResume), allowedPeers: a.allowedPeers ?? [] })),
     peers: cfg.peers.map((p) => ({ id: p.id, url: p.url })),
-  });
+  };
 
   async function localInspect(b: { id?: string }) {
     const peer = b.id ? peers.get(b.id) : undefined;
@@ -518,9 +532,11 @@ export function startRuntime(cfg: Config & { path: string }) {
       case 'get': return localGet(pr, b);
       case 'cancel': return localCancel(pr, b);
       case 'inbox': return localInbox(pr);
-      case 'agents': return localAgents();
-      case 'inspect': return localInspect(b);
-      case 'status': return localStatus();
+      case 'agents': return localAgents(pr);
+      case 'inspect':
+      case 'status':
+        if (pr.kind === 'connector') throw new MeshError('FORBIDDEN', 'not available to connectors');
+        return method === 'inspect' ? localInspect(b) : localStatus();
       default: throw new MeshError('INVALID_ARGUMENT', `unknown method ${method}`);
     }
   }
