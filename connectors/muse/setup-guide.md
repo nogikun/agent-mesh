@@ -84,16 +84,9 @@ Muse はクラウドで動くので、Gateway にはインターネットから 
 
 公開する場合も、Gateway は 127.0.0.1 で待ち受けたまま、トンネルの側で HTTPS を終端します。ブラウザからの呼び出しは `Origin` で拒否します（`allowedOrigins` に書いたものだけ許可）。
 
-### 5. Muse に登録する（未確認）
+### 5. Muse に登録する
 
-2026-11-25 時点で公式資料から分かったことは次のとおりです。
-
-- Muse のコネクターは MCP サーバーとして接続する（Connector Terms の定義）
-- 認証は「OAuth client credentials or an API key」（Connector guidelines §5.4）。この Gateway は API キー（Bearer）に対応している
-- Muse は各ツールを Read / Write / Sensitive write に分類し、初回または毎回、利用者に許可を求める。分類の提案は [tool-catalog.md](tool-catalog.md) にある
-- 公式ディレクトリへの掲載には審査（事業者確認、リスク評価、ツール審査、E2E 確認）が要る
-
-個人で使う Custom Connector を Muse の設定画面から足せるか、そのとき何を入力するかは、利用者向けのヘルプページを読めず、まだ確かめていません。Muse の設定（Settings > Connectors あたり）を見て、URL と認証情報を入れる欄があれば、手順4の公開 URL（末尾は `/mcp`）と API キーを入れてください。
+公開 URL（末尾は `/mcp`）と API キーを、Muse のチャットで Custom Connector として登録します。調べた仕様、この実装との照合、頼み方の例、うまくいかないときの切り分けは [Muse Custom Connector 適用ガイド](../../docs/reference/muse-connector.md) にまとめました。
 
 ## 例示プロンプト（Muse に話しかける例）
 

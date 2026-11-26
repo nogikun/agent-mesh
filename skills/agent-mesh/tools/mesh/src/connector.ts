@@ -186,7 +186,11 @@ export function startConnector(cfg: Config, conn: Connector) {
       if (url.pathname !== '/mcp') return send(res, 404, { error: 'not found' });
       // DNS-rebinding guard required by the MCP transport spec: browsers send Origin, server-to-server clients usually do not
       const origin = req.headers.origin;
-      if (origin && !(conn.allowedOrigins ?? []).includes(origin)) return send(res, 403, { error: 'origin not allowed' });
+      if (origin && !(conn.allowedOrigins ?? []).includes(origin)) {
+        // logged so an operator can tell a legitimate server-side client (add it to allowedOrigins) from a browser attack
+        console.error(`[mesh-connector] ${conn.id} rejected Origin: ${origin.slice(0, 200)}`);
+        return send(res, 403, { error: 'origin not allowed' });
+      }
       const tok = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '';
       if (!tok || !safeEqual(tok, conn.apiKey)) {
         res.setHeader('www-authenticate', 'Bearer realm="agent-mesh"');
