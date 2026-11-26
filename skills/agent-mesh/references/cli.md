@@ -14,6 +14,8 @@
 | `task cancel ID` | Request cancellation (best effort) |
 | `inbox` | Last 50 finished results, with auto-resume status |
 | `status` | Counts of received/sent tasks, outbox and resumes |
+| `connector add --id ID [--peers a,b] [--read-only] [--port 47140]` | Register an external MCP connector (e.g. Muse) with its own API key; restart the runtime afterwards |
+| `connector serve --id ID` | Run that connector's MCP gateway (foreground) at `http://127.0.0.1:<port>/mcp` |
 
 ## Success
 

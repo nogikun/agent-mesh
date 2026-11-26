@@ -3,7 +3,7 @@
 import { parseArgs } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, chmodSync, readFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { loadConfig, resolveBin, type Config } from './config.ts';
@@ -128,6 +128,28 @@ function initDemo(dir: string, workspace: string, force: boolean) {
   out({ schemaVersion: '1.0', ok: true, data: { files, workspace: ws } });
 }
 
+/** Adds (or replaces) a connector entry with fresh credentials; the runtime must be restarted to accept it. */
+function connectorAdd(configPath: string | undefined, id: string, peersArg: string | undefined, readOnly: boolean, port: number) {
+  const c = loadConfig(configPath);
+  const raw = JSON.parse(readFileSync(c.path, 'utf8')) as Config;
+  const allowedPeers = peersArg ? peersArg.split(',').map((x) => x.trim()).filter(Boolean) : raw.peers.map((p) => p.id);
+  const unknown = allowedPeers.filter((p) => !raw.peers.some((x) => x.id === p));
+  if (unknown.length) fail('INVALID_ARGUMENT', `unknown peers: ${unknown.join(', ')}`);
+  if (!/^[\w-]{1,64}$/.test(id)) fail('INVALID_ARGUMENT', 'connector id must be letters, digits, - or _');
+  const t = () => randomBytes(32).toString('base64url');
+  const entry = { id, token: t(), apiKey: t(), port, allowedPeers, readOnly };
+  raw.connectors = [...(raw.connectors ?? []).filter((x) => x.id !== id), entry];
+  const tmp = `${c.path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(raw, null, 2), { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, c.path); // atomic replace keeps the file valid if interrupted
+  out({ schemaVersion: '1.0', ok: true, data: {
+    id, url: `http://127.0.0.1:${port}/mcp`, allowedPeers, readOnly, apiKey: entry.apiKey,
+    next: [`restart the runtime (mesh runtime --config ${c.path})`, `start the gateway: mesh connector serve --id ${id} --config ${c.path}`],
+    note: 'apiKey is the Bearer token for MCP clients; it is also stored in the config file. Do not paste it into chats.',
+  } });
+}
+
 const USAGE = `mesh <command> [--config FILE]
   init-demo [--dir ~/.config/agent-mesh] [--workspace DIR] [--force]
   runtime                       start the node runtime (foreground)
@@ -135,7 +157,9 @@ const USAGE = `mesh <command> [--config FILE]
   agent list | agent inspect ID
   send --to ID --message TEXT [--idempotency-key KEY]   (always async)
   task get ID | task cancel ID
-  inbox | status`;
+  inbox | status
+  connector add --id ID [--peers a,b] [--read-only] [--port 47140]
+  connector serve --id ID           start the MCP gateway (foreground)`;
 
 async function main() {
   const { values: v, positionals: p } = parseArgs({
@@ -143,6 +167,7 @@ async function main() {
     options: {
       config: { type: 'string' }, to: { type: 'string' }, message: { type: 'string' }, 'idempotency-key': { type: 'string' },
       dir: { type: 'string' }, workspace: { type: 'string' }, force: { type: 'boolean' },
+      id: { type: 'string' }, peers: { type: 'string' }, 'read-only': { type: 'boolean' }, port: { type: 'string' },
       json: { type: 'boolean' }, async: { type: 'boolean' }, // accepted for spec compatibility; output is always JSON and send is always async
     },
   });
@@ -156,6 +181,26 @@ async function main() {
       : Promise.reject(e));
     console.error(`[mesh] ${c.nodeId} listening on ${rt.url} (agents: ${c.agents.map((a) => a.id).join(', ')})`);
     const stop = () => { console.error('[mesh] stopping'); void rt.close().then(() => process.exit(0)); };
+    process.on('SIGINT', stop);
+    process.on('SIGTERM', stop);
+    return;
+  }
+  if (cmd === 'connector' && sub === 'add') {
+    if (!v.id) fail('INVALID_ARGUMENT', '--id is required');
+    const port = Number(v.port ?? 47140);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) fail('INVALID_ARGUMENT', '--port must be 1024-65535');
+    return connectorAdd(cfg, v.id!, v.peers, Boolean(v['read-only']), port);
+  }
+  if (cmd === 'connector' && sub === 'serve') {
+    const c = loadConfig(cfg);
+    const conn = c.connectors?.find((x) => x.id === v.id);
+    if (!conn) fail('NOT_FOUND', `no connector "${v.id}" in ${c.path} (run: mesh connector add --id <id>)`);
+    const { startConnector } = await import('./connector.ts');
+    const gw = await startConnector(c, conn!).catch((e: NodeJS.ErrnoException) => e.code === 'EADDRINUSE'
+      ? fail('CONFLICT', `Port ${conn!.port} is already in use: the gateway is probably already running.`)
+      : Promise.reject(e));
+    console.error(`[mesh-connector] ${conn!.id} MCP endpoint ${gw.url} (peers: ${conn!.allowedPeers.join(', ')}${conn!.readOnly ? ', read-only' : ''})`);
+    const stop = () => { void gw.close().then(() => process.exit(0)); };
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
     return;

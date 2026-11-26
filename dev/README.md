@@ -12,6 +12,7 @@
 | `src/providers.ts` | `claude -p` / `codex exec` の起動・再開・出力解析（M08, IF §6） |
 | `src/runtime.ts` | A2A 受信・worker・push outbox・自動再開・ローカル制御 API（M05/M07, §5） |
 | `src/cli.ts`, `bin/mesh` | mesh CLI（M04, IF §3） |
+| `src/connector.ts` | Muse などの外部向け MCP Gateway（M10, IF §7）。手順は `../connectors/muse/setup-guide.md` |
 | `../skills/agent-mesh/` | 配布用の Agent Skill（IF §2）。`tools/mesh/` は `pnpm sync:skill` で dev/ から作るコピー |
 
 実行時の依存はありません（Node 24 の型除去・`node:sqlite`・`fetch` を使用）。pnpm で管理しているのは開発用の `typescript` と `@types/node` だけです。
@@ -47,4 +48,4 @@ UC01（Claude が自分のターン内で Codex に依頼し、結果が届い�
 
 ## 未実装（設計書のうちプロトタイプで省いた部分）
 
-S モード（Runtime なしのレシート）、`setup` / `uninstall` / launchd 登録、SSE / subscribe、INPUT_REQUIRED への返信、CAO、Muse Connector、Tailscale 越しの実機試験、OS キーチェーンでのトークン保管、パッケージ分割（`packages/*`）。コード中の `shortcut:` コメントが格上げ条件を示しています。
+S モード（Runtime なしのレシート）、`setup` / `uninstall` / launchd 登録、SSE / subscribe、INPUT_REQUIRED への返信、CAO、Muse 側での Connector の登録と OAuth、Tailscale 越しの実機試験、OS キーチェーンでのトークン保管、パッケージ分割（`packages/*`）。コード中の `shortcut:` コメントが格上げ条件を示しています。

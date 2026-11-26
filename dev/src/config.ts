@@ -16,6 +16,16 @@ export type Agent = {
 };
 export type Peer = { id: string; url: string; token: string };            // url = A2A JSON-RPC endpoint
 export type Caller = { id: string; token: string; pushOrigin: string };  // who may call us, and where we may push
+/** External connector gateway (e.g. Muse). Separate authorization boundary from the node owner (IF §7). */
+export type Connector = {
+  id: string;
+  token: string;            // gateway -> runtime (local API), scoped to this connector
+  apiKey: string;           // external client -> gateway (Bearer)
+  port: number;             // gateway listens on 127.0.0.1:<port>
+  allowedPeers: string[];   // agents the external client may use
+  readOnly?: boolean;       // list/get only: no submit, no cancel
+  allowedOrigins?: string[];// browser Origin values accepted (DNS-rebinding guard); none by default
+};
 export type Config = {
   schemaVersion: '1.0';
   nodeId: string;
@@ -27,6 +37,7 @@ export type Config = {
   callers: Caller[];
   agents: Agent[];
   peers: Peer[];
+  connectors?: Connector[];
   policy: { maxConcurrentTurns: number; defaultDeadlineSeconds: number };
   allowApiKeyBilling?: boolean;
 };
